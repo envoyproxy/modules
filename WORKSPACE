@@ -1,0 +1,16 @@
+workspace(name = "envoy-modules")
+
+load(":archives.bzl", "load_archives")
+load_archives()
+
+load(":deps.bzl", "resolve_dependencies")
+resolve_dependencies()
+
+load(":toolchains.bzl", "load_toolchains")
+load_toolchains()
+
+load(":packages.bzl", "load_packages")
+load_packages()
+
+load("@toolshed_pip3//:requirements.bzl", "install_deps")
+install_deps()
