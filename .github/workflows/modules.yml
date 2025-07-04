@@ -1,0 +1,59 @@
+name: Build modules
+
+on:
+  push:
+    branches:
+    - main
+  pull_request:
+    paths:
+  release:
+    types:
+      released
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ${{ matrix.runs-on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - arch: x86_64
+          runs-on: ubuntu-22.04
+        - arch: aarch64
+          runs-on: ubuntu-22.04-arm
+    steps:
+    - uses: actions/checkout@v4
+    - name: Fetch versions
+      id: deps
+      run: |
+        bazel build //wasm/http-hello-world:module
+
+  publish:
+    if: github.event_name == 'release'
+    runs-on: ubuntu-24.04
+    needs:
+    - build
+    permissions:
+      contents: write
+    steps:
+    - uses: actions/checkout@v4
+    - name: Download all workflow run artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+    - name: Upload release assets
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        for artifact in artifacts/*; do
+            [[ ! -d "$artifact" ]] && continue
+            name=$(basename "$artifact")
+            file=$(ls "$artifact"/*.tar.xz)
+            echo "Uploading $file as $name.tar.xz"
+            gh release upload "${{ github.event.release.tag_name }}" \
+                "$file#$name.tar.xz" \
+                --clobber
+        done

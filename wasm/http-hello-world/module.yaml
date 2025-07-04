@@ -1,0 +1,12 @@
+name: wasm-http-hello-world
+title: Hello world (Wasm)
+description: |
+  Wasm Hello world HTTP filter
+type: wasm
+language: c++
+labels:
+- wasm
+- http
+- hello
+- world
+- c++
