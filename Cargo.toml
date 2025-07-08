@@ -1,2 +1,2 @@
 [workspace]
-members = ["dynamic/rust/hello"]
+members = ["dynamic/rust/ip_restriction"]
