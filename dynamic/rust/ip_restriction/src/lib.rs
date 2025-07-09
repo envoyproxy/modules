@@ -11,7 +11,9 @@ use std::sync::Arc;
 // TODO(wbpcode): to support ip range in the future.
 #[derive(Serialize, Deserialize, Debug)]
 pub struct RawFilterConfig {
+  #[serde(default)]
   denied_addresses: HashSet<String>,
+  #[serde(default)]
   allowed_addresses: HashSet<String>,
 }
 
@@ -26,7 +28,7 @@ pub struct FilterConfigImpl {
 // The trait corresponds to a Envoy filter chain configuration.
 #[derive(Debug, Clone)]
 pub struct FilterConfig {
-  config: Arc<FilterConfigImpl>,
+  config: Arc<FilterConfigImpl>, // use Arc to make it is cheap to clone the FilterConfig.
 }
 
 impl FilterConfig {
@@ -44,7 +46,7 @@ impl FilterConfig {
     };
 
     // One and only one of denied_addresses and allowed_addresses should be set.
-    if filter_config.denied_addresses.is_empty() != filter_config.allowed_addresses.is_empty() {
+    if filter_config.denied_addresses.is_empty() == filter_config.allowed_addresses.is_empty() {
       eprintln!(
         "Error parsing filter config: one and only one of denied_addresses\
          and allowed_addresses should be set"
@@ -119,6 +121,7 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for Filter {
     }
 
     let mut downstream_addr_str = String::new();
+
     let address_buffer = downstream_addr.unwrap();
     let downstream_addr_slice = address_buffer.as_slice();
 
@@ -174,4 +177,195 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for Filter {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn test_new_filter_config_both_set() {
+    let filter_config = FilterConfig::new(
+      r#"{
+        "allowed_addresses": [
+          "127.0.0.1",
+          "::1"
+        ],
+        "denied_addresses": [
+          "192.168.1.1"
+        ]
+      }"#,
+    );
+    assert!(filter_config.is_none()); // Only one of allowed_addresses and denied_addresses should be set.
+  }
+
+  #[test]
+  fn test_new_filter_config_allowed_set() {
+    let filter_config = FilterConfig::new(
+      r#"{
+        "allowed_addresses": [
+          "127.0.0.1",
+          "::1"
+        ]
+      }"#,
+    );
+    assert!(filter_config.is_some());
+  }
+
+  #[test]
+  fn test_new_filter_config_denied_set() {
+    let filter_config = FilterConfig::new(
+      r#"{
+        "denied_addresses": [
+          "192.168.1.1"
+        ]
+      }"#,
+    );
+    assert!(filter_config.is_some());
+  }
+
+  #[test]
+  fn test_new_filter_config_invalid_ip() {
+    let filter_config = FilterConfig::new(
+      r#"{
+        "allowed_addresses": [
+          "127.0.0.1",
+          "invalid_ip"
+        ]
+      }"#,
+    );
+    assert!(filter_config.is_none());
+  }
+
+  #[test]
+  fn test_filter_denied_because_no_address() {
+    let filter_config = FilterConfig::new(
+      r#"{
+        "denied_addresses": [
+          "192.168.1.1"
+        ]
+      }"#,
+    );
+    assert!(filter_config.is_some());
+
+    let mut filter = Filter {
+      filter_config: filter_config.unwrap(),
+    };
+
+    let mut mock_envoy_filter = envoy_proxy_dynamic_modules_rust_sdk::MockEnvoyHttpFilter::new();
+
+    mock_envoy_filter
+      .expect_get_attribute_string()
+      .times(1)
+      .returning(|_| None);
+    mock_envoy_filter
+      .expect_get_attribute_int()
+      .times(1)
+      .returning(|_| None);
+    mock_envoy_filter
+      .expect_send_response()
+      .times(1)
+      .returning(|code, _, _| assert!(code == 403));
+
+    assert_eq!(
+      filter.on_request_headers(&mut mock_envoy_filter, true),
+      abi::envoy_dynamic_module_type_on_http_filter_request_headers_status::StopIteration
+    );
+  }
+
+  #[test]
+  fn test_filter_with_allowed_list() {
+    let filter_config = FilterConfig::new(
+      r#"{
+        "allowed_addresses": [
+          "127.0.0.1",
+          "::1"
+        ]
+      }"#,
+    );
+    assert!(filter_config.is_some());
+
+    let mut filter = Filter {
+      filter_config: filter_config.unwrap(),
+    };
+
+    let mut mock_envoy_filter = envoy_proxy_dynamic_modules_rust_sdk::MockEnvoyHttpFilter::new();
+
+    mock_envoy_filter
+      .expect_get_attribute_string()
+      .times(1)
+      .returning(|_| Some(EnvoyBuffer::new("127.0.0.1:80")));
+    mock_envoy_filter
+      .expect_get_attribute_int()
+      .times(1)
+      .returning(|_| Some(80));
+
+    assert_eq!(
+      filter.on_request_headers(&mut mock_envoy_filter, true),
+      abi::envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue
+    );
+
+    mock_envoy_filter
+      .expect_get_attribute_string()
+      .times(1)
+      .returning(|_| Some(EnvoyBuffer::new("192.168.1.1:80")));
+    mock_envoy_filter
+      .expect_get_attribute_int()
+      .times(1)
+      .returning(|_| Some(80));
+    mock_envoy_filter
+      .expect_send_response()
+      .times(1)
+      .returning(|code, _, _| assert!(code == 403));
+
+    assert_eq!(
+      filter.on_request_headers(&mut mock_envoy_filter, true),
+      abi::envoy_dynamic_module_type_on_http_filter_request_headers_status::StopIteration
+    );
+  }
+
+  #[test]
+  fn test_filter_with_denied_list() {
+    let filter_config = FilterConfig::new(
+      r#"{
+        "denied_addresses": [
+          "192.168.1.1"
+        ]
+      }"#,
+    );
+    assert!(filter_config.is_some());
+
+    let mut filter = Filter {
+      filter_config: filter_config.unwrap(),
+    };
+
+    let mut mock_envoy_filter = envoy_proxy_dynamic_modules_rust_sdk::MockEnvoyHttpFilter::new();
+
+    mock_envoy_filter
+      .expect_get_attribute_string()
+      .times(1)
+      .returning(|_| Some(EnvoyBuffer::new("192.168.1.1:80")));
+    mock_envoy_filter
+      .expect_get_attribute_int()
+      .times(1)
+      .returning(|_| Some(80));
+    mock_envoy_filter
+      .expect_send_response()
+      .times(1)
+      .returning(|code, _, _| assert!(code == 403));
+
+    assert_eq!(
+      filter.on_request_headers(&mut mock_envoy_filter, true),
+      abi::envoy_dynamic_module_type_on_http_filter_request_headers_status::StopIteration
+    );
+
+    mock_envoy_filter
+      .expect_get_attribute_string()
+      .times(1)
+      .returning(|_| Some(EnvoyBuffer::new("127.0.0.1:80")));
+    mock_envoy_filter
+      .expect_get_attribute_int()
+      .times(1)
+      .returning(|_| Some(80));
+
+    assert_eq!(
+      filter.on_request_headers(&mut mock_envoy_filter, true),
+      abi::envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue
+    );
+  }
 }
