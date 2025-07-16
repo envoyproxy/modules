@@ -93,7 +93,7 @@ dependencies = [
 [[package]]
 name = "envoy-proxy-dynamic-modules-rust-sdk"
 version = "0.1.0"
-source = "git+https://github.com/envoyproxy/envoy?rev=73fe00fc139fd5053f4c4a5d66569cc254449896#73fe00fc139fd5053f4c4a5d66569cc254449896"
+source = "git+https://github.com/envoyproxy/envoy?rev=4d2c32b3f3ec5cd1be5666819cc190ef2b0da8e3#4d2c32b3f3ec5cd1be5666819cc190ef2b0da8e3"
 dependencies = [
  "bindgen",
  "mockall",

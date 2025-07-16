@@ -1,0 +1,18 @@
+services:
+  proxy:
+    image: ${ENVOY_IMAGE:-envoyproxy/envoy-dev:latest}
+    ports:
+    - "10000:10000"
+    volumes:
+    - "./envoy.yaml:/etc/envoy.yaml"
+    - "../../target/debug:/target/debug"
+    entrypoint:
+    - /usr/local/bin/envoy
+    - -c
+    - /etc/envoy.yaml
+    - --concurrency
+    - "1"
+    environment:
+    - ENVOY_DYNAMIC_MODULES_SEARCH_PATH=/target/debug
+  web_service:
+    image: kennethreitz/httpbin

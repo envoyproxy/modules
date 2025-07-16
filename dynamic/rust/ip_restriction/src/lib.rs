@@ -12,15 +12,15 @@ use std::sync::Arc;
 #[derive(Serialize, Deserialize, Debug)]
 pub struct RawFilterConfig {
     #[serde(default)]
-    denied_addresses: HashSet<String>,
+    deny_addresses: HashSet<String>,
     #[serde(default)]
-    allowed_addresses: HashSet<String>,
+    allow_addresses: HashSet<String>,
 }
 
 #[derive(Debug)]
 pub struct FilterConfigImpl {
-    denied_addresses_exact: HashSet<String>,
-    allowed_addresses_exact: HashSet<String>,
+    deny_addresses_exact: HashSet<String>,
+    allow_addresses_exact: HashSet<String>,
 }
 
 // This implements the [`envoy_proxy_dynamic_modules_rust_sdk::HttpFilterConfig`] trait.
@@ -32,10 +32,10 @@ pub struct FilterConfig {
 }
 
 impl FilterConfig {
-    /// This is the constructor for the [`FilterConfig`].
-    ///
-    /// filter_config is the filter config from the Envoy config here:
-    /// https://www.envoyproxy.io/docs/envoy/latest/api-v3/extensions/dynamic_modules/v3/dynamic_modules.proto#envoy-v3-api-msg-extensions-dynamic-modules-v3-dynamicmoduleconfig
+    // This is the constructor for the [`FilterConfig`].
+    //
+    // filter_config is the filter config from the Envoy config here:
+    // https://www.envoyproxy.io/docs/envoy/latest/api-v3/extensions/dynamic_modules/v3/dynamic_modules.proto#envoy-v3-api-msg-extensions-dynamic-modules-v3-dynamicmoduleconfig
     pub fn new(filter_config: &str) -> Option<Self> {
         let filter_config: RawFilterConfig = match serde_json::from_str(filter_config) {
             Ok(cfg) => cfg,
@@ -45,38 +45,38 @@ impl FilterConfig {
             }
         };
 
-        // One and only one of denied_addresses and allowed_addresses should be set.
-        if filter_config.denied_addresses.is_empty() == filter_config.allowed_addresses.is_empty() {
+        // One and only one of deny_addresses and allow_addresses should be set.
+        if filter_config.deny_addresses.is_empty() == filter_config.allow_addresses.is_empty() {
             eprintln!(
-                "Error parsing filter config: one and only one of denied_addresses\
-         and allowed_addresses should be set"
+                "Error parsing filter config: one and only one of deny_addresses\
+         and allow_addresses should be set"
             );
             return None;
         }
 
-        let mut denied_addresses_exact = HashSet::new();
-        let mut allowed_addresses_exact = HashSet::new();
+        let mut deny_addresses_exact = HashSet::new();
+        let mut allow_addresses_exact = HashSet::new();
 
         // Validate every ip in the set is a valid IPv4 address or IPv6 address.
-        for ip in &filter_config.allowed_addresses {
+        for ip in &filter_config.allow_addresses {
             if Ipv4Addr::from_str(ip).is_err() && Ipv6Addr::from_str(ip).is_err() {
-                eprintln!("Error parsing ip in allowed_addresses: {ip}");
+                eprintln!("Error parsing ip in allow_addresses: {ip}");
                 return None;
             }
-            allowed_addresses_exact.insert(ip.clone());
+            allow_addresses_exact.insert(ip.clone());
         }
-        for ip in &filter_config.denied_addresses {
+        for ip in &filter_config.deny_addresses {
             if Ipv4Addr::from_str(ip).is_err() && Ipv6Addr::from_str(ip).is_err() {
-                eprintln!("Error parsing ip in denied_addresses: {ip}");
+                eprintln!("Error parsing ip in deny_addresses: {ip}");
                 return None;
             }
-            denied_addresses_exact.insert(ip.clone());
+            deny_addresses_exact.insert(ip.clone());
         }
 
         Some(FilterConfig {
             config: Arc::new(FilterConfigImpl {
-                denied_addresses_exact,
-                allowed_addresses_exact,
+                deny_addresses_exact,
+                allow_addresses_exact,
             }),
         })
     }
@@ -145,11 +145,11 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for Filter {
         }
 
         // Check if the downstream addr is in the allowed list.
-        if !self.filter_config.config.allowed_addresses_exact.is_empty()
+        if !self.filter_config.config.allow_addresses_exact.is_empty()
             && !self
                 .filter_config
                 .config
-                .allowed_addresses_exact
+                .allow_addresses_exact
                 .contains(&downstream_addr_str)
         {
             envoy_filter.send_response(403, vec![], Some(b"Request is forbidden."));
@@ -157,11 +157,11 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for Filter {
         }
 
         // Check if the downstream addr is in the denied list.
-        if !self.filter_config.config.denied_addresses_exact.is_empty()
+        if !self.filter_config.config.deny_addresses_exact.is_empty()
             && self
                 .filter_config
                 .config
-                .denied_addresses_exact
+                .deny_addresses_exact
                 .contains(&downstream_addr_str)
         {
             envoy_filter.send_response(403, vec![], Some(b"Request is forbidden."));
@@ -172,6 +172,39 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for Filter {
     }
 }
 
+/// This implements the [`envoy_proxy_dynamic_modules_rust_sdk::ProgramInitFunction`].
+///
+/// This is called exactly once when the module is loaded. It can be used to
+/// initialize global state as well as check the runtime environment to ensure that
+/// the module is running in a supported environment.
+///
+/// Returning `false` will cause Envoy to reject the config hence the
+/// filter will not be loaded.
+fn init() -> bool {
+    true
+}
+
+// This implements the [`envoy_proxy_dynamic_modules_rust_sdk::NewHttpFilterConfigFunction`].
+//
+// This is the entrypoint every time a new HTTP filter is created via the DynamicModuleFilter config.
+// TODO(wbpcode): rust SDK doesn't provide the mock of EnvoyHttpFilterConfig,
+// so we can't test the new_http_filter_config_fn function.
+#[allow(dead_code)]
+fn new_http_filter_config_fn<EC: EnvoyHttpFilterConfig, EHF: EnvoyHttpFilter>(
+    _envoy_filter_config: &mut EC,
+    filter_name: &str,
+    filter_config: &[u8],
+) -> Option<Box<dyn HttpFilterConfig<EC, EHF>>> {
+    let filter_config = std::str::from_utf8(filter_config).unwrap();
+    match filter_name {
+        "ip_restriction" => FilterConfig::new(filter_config)
+            .map(|config| Box::new(config) as Box<dyn HttpFilterConfig<EC, EHF>>),
+        _ => panic!("Unknown filter name: {filter_name}"),
+    }
+}
+
+declare_init_functions!(init, new_http_filter_config_fn);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,23 +213,23 @@ mod tests {
     fn test_new_filter_config_both_set() {
         let filter_config = FilterConfig::new(
             r#"{
-        "allowed_addresses": [
+        "allow_addresses": [
           "127.0.0.1",
           "::1"
         ],
-        "denied_addresses": [
+        "deny_addresses": [
           "192.168.1.1"
         ]
       }"#,
         );
-        assert!(filter_config.is_none()); // Only one of allowed_addresses and denied_addresses should be set.
+        assert!(filter_config.is_none()); // Only one of allow_addresses and deny_addresses should be set.
     }
 
     #[test]
     fn test_new_filter_config_allowed_set() {
         let filter_config = FilterConfig::new(
             r#"{
-        "allowed_addresses": [
+        "allow_addresses": [
           "127.0.0.1",
           "::1"
         ]
@@ -209,7 +242,7 @@ mod tests {
     fn test_new_filter_config_denied_set() {
         let filter_config = FilterConfig::new(
             r#"{
-        "denied_addresses": [
+        "deny_addresses": [
           "192.168.1.1"
         ]
       }"#,
@@ -221,7 +254,7 @@ mod tests {
     fn test_new_filter_config_invalid_ip() {
         let filter_config = FilterConfig::new(
             r#"{
-        "allowed_addresses": [
+        "allow_addresses": [
           "127.0.0.1",
           "invalid_ip"
         ]
@@ -234,7 +267,7 @@ mod tests {
     fn test_filter_denied_because_no_address() {
         let filter_config = FilterConfig::new(
             r#"{
-        "denied_addresses": [
+        "deny_addresses": [
           "192.168.1.1"
         ]
       }"#,
@@ -271,7 +304,7 @@ mod tests {
     fn test_filter_with_allowed_list() {
         let filter_config = FilterConfig::new(
             r#"{
-        "allowed_addresses": [
+        "allow_addresses": [
           "127.0.0.1",
           "::1"
         ]
@@ -323,7 +356,7 @@ mod tests {
     fn test_filter_with_denied_list() {
         let filter_config = FilterConfig::new(
             r#"{
-        "denied_addresses": [
+        "deny_addresses": [
           "192.168.1.1"
         ]
       }"#,
